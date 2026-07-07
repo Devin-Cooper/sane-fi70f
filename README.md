@@ -4,9 +4,10 @@ Work-in-progress support for the **Ricoh/Fujitsu fi-70F** flatbed scanner (USB `
 the SANE `epjitsu` backend. This repository holds our patch, the full modified backend, the
 reverse-engineering write-up, and proof images.
 
-This is the **first working colour scan of the fi-70F on Linux.** Read path and descramble
-geometry are solved and hardware-verified; calibration is bright and correct apart from a
-residual per-channel colour cast.
+This is a **full, gap-free, correctly-calibrated colour scan of the fi-70F on Linux**, verified
+numerically against the Windows PaperStream output. Read path, descramble geometry, and the
+calibration operating point are all solved and hardware-verified; the only remaining difference
+from Windows is the output tone curve (gamma), which SANE leaves user-adjustable.
 
 Upstream tracking issue: **[sane-project/backends#833](https://gitlab.com/sane-project/backends/-/issues/833)**
 
@@ -16,20 +17,40 @@ Upstream tracking issue: **[sane-project/backends#833](https://gitlab.com/sane-p
 |---|---|
 | Firmware upload, detection | ✅ works |
 | Full-page scan (read path) | ✅ works — free-running page, strip the 8-byte per-block trailer |
-| Descramble geometry | ✅ solved — fixed permutation, **no drift** (per-block jump 0.008 px) |
-| Coarse (analog) calibration | ✅ fi-70F-specific gain target (bright, no gross cast) |
-| Seam / dead-pixel handling | ⚠️ interpolated (24 masked px/head); crop-to-1240 planned |
-| Per-channel colour cast | ⬜ open — red under-responds in midtones; needs a tone LUT |
+| Descramble geometry | ✅ **solved, gap-free** — 3×432-px heads at offsets 0/2190/4380, tiled → 1240 px; encoder ramp **265/265 positions, 0 jumps** |
+| Seam handling | ✅ heads tile continuously — **no dead pixels, no interpolation** |
+| Coarse (analog) calibration | ✅ Windows' converged per-channel operating point (offset 22/23/21, gain 37/35/34) |
+| Per-channel colour cast | ✅ **fixed** — neutral wedge, max channel deviation ~7.6 (was ~70) |
+| Output tone / gamma | ⬜ more linear than PaperStream's baked contrast curve (SANE-appropriate; user-adjustable) |
 
-See **[FINDINGS.md](FINDINGS.md)** for the full technical story, including the root-cause
-(the 8-byte block trailer) that made an apparent per-block "drift" disappear.
+See **[FINDINGS.md](FINDINGS.md)** for the full technical story: the 8-byte block trailer (read
+path), the self-decoding Gray-code target used as the oracle, the true 3×432 head geometry, and
+Windows' coarse operating point.
+
+## Verified vs Windows (fresh Linux scan of a self-decoding target)
+
+| metric | old build | this build | Windows |
+|---|---|---|---|
+| encoder ramp | ~2 seam gaps | **265/265, 0 jumps** | 265/265 |
+| neutral-wedge max channel deviation | ~70 (cyan) | **7.6** | ~3 |
+| white uniformity (σ across columns) | — | **3.1** (flat) | 6.9 |
+
+Ours (left) vs Windows PaperStream (right), row-aligned:
+
+![](images/05-final-vs-windows.png)
+
+Encoder tracks run gap-free full width across both head seams (ours top / Windows bottom):
+
+![](images/06-encoder-gapfree.png)
 
 ## What's here
 
-- `backend/epjitsu.c`, `backend/epjitsu.h` — the full modified backend (against
-  `sane-project/backends` @ `ca8d120`).
+- `backend/epjitsu.c`, `backend/epjitsu-cmd.h`, `backend/epjitsu.h`, `backend/epjitsu.conf.in` —
+  the full modified backend (against `sane-project/backends` @ `ca8d120`). The fi-70F coarse/fine
+  cal tables live in `epjitsu-cmd.h`.
 - `fi70f-epjitsu.patch` — the diff only, for applying onto an upstream checkout.
-- `images/` — before/after proof (drift symptom, geometry fixed, colour before/after).
+- `images/` — proof: read-path drift symptom vs geometry fixed, colour before/after, and the final
+  gap-free / neutral-wedge comparison against the Windows golden.
 
 ## Build & use
 

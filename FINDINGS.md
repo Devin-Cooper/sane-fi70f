@@ -1,121 +1,151 @@
 # Ricoh / Fujitsu fi-70F on SANE (epjitsu) — reverse-engineering findings
 
-Status: **first working colour scans of the fi-70F on Linux.** Geometry (read path +
-descramble) is solved and hardware-verified; calibration is bright and correct except for a
-residual per-channel colour cast (see *Open issues*). Everything below is verified against real
-hardware (a fi-70F on firmware `0000`) and, where noted, against a USBPcap trace of the Windows
-PaperStream driver.
+Status: **full, gap-free, correctly-calibrated colour scans of the fi-70F on Linux.** Read path,
+descramble geometry, and the calibration operating point are all solved and hardware-verified
+against the Windows PaperStream output. The only remaining difference from Windows is the output
+**tone curve** (gamma), which is a SANE-appropriate, user-adjustable choice — see *Remaining
+difference*. Everything below is verified on real hardware (a fi-70F on firmware `0000`) and, where
+noted, against a USBPcap trace of the Windows driver plus a purpose-built self-decoding target.
 
 Tracking issue: <https://gitlab.com/sane-project/backends/-/issues/833>
 
+> **2026-07-07 update.** An earlier iteration of this document described the descramble as 3 heads
+> of **433** px at plane offsets **68/2258/4448** with a constant rotation `SHIFT_S0=939` and 24
+> interpolated "dead" pixels per head. **That was wrong** (it left ~2 seam gaps / a blurred seam).
+> Using a self-decoding Gray-code target as an oracle, the true geometry is now solved and the
+> seams are gap-free with no interpolation — details below. The read-path / trailer story is
+> unchanged and still correct.
+
 ---
 
-## TL;DR — the one thing that mattered
+## How it was verified (the oracle)
+
+We printed a **self-decoding target**: the top band is a 9-track **Gray-code absolute-position
+encoder** — every output column encodes its own true X (`pos p = (x−90)/4`, 265 positions). Below
+it are neutral-gray and per-channel step wedges. Because every column self-identifies, the scan is
+its own ruler:
+
+- **Descramble is correct ⟺ decoding the 9 tracks down each output column yields a continuous
+  `0…264` ramp with no jumps.** A seam gap shows up as a jump in the ramp.
+- **Colour is correct ⟺ the neutral wedge reads `R≈G≈B`.**
+
+Ground truth is the Windows PaperStream scan of the same physical target (a lossless 1240×1748
+image), plus its cold-start USBPcap. We also captured our own scan's raw over `usbmon` and confirmed
+it is **byte-structurally identical** to the Windows raw — so *emission was never the problem*; both
+descramble to a flat white (ours σ≈5.7, Windows σ≈4.5 across columns).
+
+---
+
+## TL;DR #1 (read path) — strip the 8-byte block trailer
 
 The fi-70F closes **every 87-line scan block with an 8-byte trailer** (`02 <len:3> 00 00 80 00`),
 so each device block is `87 × 6000 + 8 = 522008` bytes. The driver must **strip that trailer**.
 
-We originally believed the opposite ("no 8-byte trailer on this device") and left the trailers
-inline in the image buffer. Because we buffer the whole page as one transfer, ~20 trailers ended
-up embedded in the raw data, shifting every block 8 bytes late. That accumulating 8-byte/block
-error *looked* like a mysterious **per-block horizontal "drift"** (~one head-width rotation per
-block), which we then "corrected" with an empirical per-block circular shift
-(`shift = 939 + 429.75·block`). It fit the data but was a curve-fit to a bug.
+Leaving it inline (we originally believed "no trailer on this device") embeds ~20 trailers in the
+raw buffer, shifting every block 8 bytes late — which *looked* like a per-block horizontal "drift"
+we once curve-fit with `shift = 939 + 429.75·block`. Strip the trailer and the drift vanishes
+(measured per-block jump `430.374 px → 0.008 px`); the descramble becomes a plain fixed per-line
+permutation. *Lesson: index by absolute device-stream position, never by transfer block.*
 
-**Strip the trailer and the drift vanishes** (measured per-block jump: `430.374 px → 0.008 px`).
-The descramble then collapses to a plain **fixed per-line permutation** — exactly like `canon_dr`'s
-3-head `COLOR_INTERLACE` modes — with a single constant offset and no per-block term at all.
+## TL;DR #2 (geometry) — 3 heads of 432, tiled with no dead pixels
 
-Lesson (courtesy of a prior-art pass over the SANE tree): *no* production backend descrambles a
-segmented sensor with a line- or block-dependent shift. If you find yourself needing one, suspect
-the byte framing first.
+The "seam gaps" were **not** an emission or calibration problem — they were a descramble bug:
+plane offset `+68` and head width `409/433` were both wrong. `68/3` is **non-integer**, so the
+`+68` "dead-lead" *misaligned the 3-way byte interleave*; and 409 truncated exactly the head-edge
+pixels that fill the seams. With the correct geometry the three heads tile continuously.
+
+## TL;DR #3 (colour) — match Windows' coarse operating point, not just the fine-cal
+
+The cyan cast is set by the **coarse (analog) operating point**. Windows converges to *per-channel*
+gains `0x37/0x35/0x34` and offsets `0x22/0x23/0x21`; the old code forced a single shared gain at the
+wrong target, so red stayed under-gained. Sending Windows' converged c6 verbatim + a real per-pixel
+fine-cal table makes the neutral wedge neutral.
 
 ---
 
 ## Device overview
 
-- USB `05ca:0308`, firmware-upload device. Firmware blob is `Comp70fFirmFile` (an `NDL1` blob)
-  from the PaperStream IP package. Two revisions seen in the wild: `70f_0000.nal` (this unit) and
-  `70f_0A00.nal` (@tete17's unit). Config: `firmware .../70f_0000.nal` + `usb 0x05ca 0x0308` in
-  `epjitsu.conf`.
-- 3-segment CIS sensor (three read-heads), 300 dpi, flatbed, colour.
-- Belongs in the **epjitsu** backend (with the fi-60F/fi-65F), not fujitsu — per @kitno455.
+- USB `05ca:0308`, firmware-upload device (`Comp70fFirmFile`, an `NDL1` blob, from PaperStream IP).
+  Revisions seen: `70f_0000.nal` (this unit) and `70f_0A00.nal` (@tete17's). Config:
+  `firmware .../70f_0000.nal` + `usb 0x05ca 0x0308`.
+- 3-read-head CIS sensor, 300 dpi, colour. Belongs in **epjitsu** (with fi-60F/fi-65F), not fujitsu.
 
 ## Read path (`read_from_scanner`, `sane_read`)
 
 The fi-70F **free-runs** the whole page from a single `0x1B 0xD2` with no inter-block pacing.
-Reading it in the normal per-block cadence (read → descramble → read) starves/overruns its FIFO
-and stalls the carriage after ~1 block ("reading slower gets more lines" is the classic tell).
 What makes a full page stream end-to-end:
 
-1. **Buffer the whole page as ONE block** — `block_img.height = fullscan.height`; run descramble
-   once at the end. Removes the read→descramble→read gaps.
-2. **Request `0xFE00` (65024) bytes per bulk-IN** (matches Windows); don't clamp the request to
-   the block remainder (a partial request stalls the pipe — same as the S1300i).
-3. **Strip the 8-byte per-block trailer.** Each device block is `522008` bytes = `87×6000` image
-   bytes + an 8-byte trailer. We track the device-stream position (`dev_pos`) and copy image bytes
-   only, so a trailer split across a 65024-byte read is handled correctly.
-4. **Keep the captured SET_WINDOW `ypix = 0x6d8` (1752, 8-aligned)**; overwriting it with the real
-   scan height (1749, not a multiple of 8) also stalls after ~1 block.
+1. **Buffer the whole page as ONE block** (`block_img.height = fullscan.height`); descramble once.
+2. **Request `0xFE00` (65024) bytes per bulk-IN**; don't clamp to the block remainder.
+3. **Strip the 8-byte per-block trailer** (`522008 = 87×6000 + 8`), tracking device-stream position
+   (`dev_pos`) so a trailer split across a read is handled correctly.
+4. **Keep the captured SET_WINDOW `ypix = 0x6d8` (1752, 8-aligned)**.
 
-Confirmed against the trace: 20 device blocks of `522008` + a final partial, no commands
-mid-stream.
+## Descramble (`descramble_raw`, `MODEL_FI70F`, main scan) — SOLVED
 
-## Descramble (`descramble_raw`, `MODEL_FI70F`, main scan)
+Each raw 6000-byte line is 3 colour planes at byte offsets **0 / 2190 / 4380** (plane stride 2190).
+Within a plane the 3 read-heads are **byte-interleaved**: head *h*, pixel *k* = `plane[k*3 + h]`,
+each head **432** px wide (`432 × 3 = 1296` bytes/plane). The heads tile (horizontally mirrored)
+into the **1240-px** output; output column *x* reads:
 
-After the trailer is stripped, each raw 6000-byte line descrambles by a **fixed permutation**:
+| output column x | head (interleave) | in-head pixel |
+|---|---|---|
+| `x ≤ 402` | 2 | `402 − x` |
+| `403 ≤ x ≤ 834` | 1 | `834 − x` |
+| `x ≥ 835` | 0 | `1265 − x` |
 
-- 3 colour planes at byte offsets **68 / 2258 / 4448** (plane stride **2190**), plane width **433**.
-- Within a plane the 3 heads are **byte-interleaved**: head *i*, pixel *k* = `plane[k*3 + i]`.
-- Tile the heads `[h0 | h1 | h2]` → **1299** px, stack the 3 planes → RGB, **mirror** horizontally,
-  then rotate by a **single constant offset** (`FI70F_SHIFT_S0 = 939`) to place the paper edge.
-- **No per-block term.** (The old `+429.75·block` was the trailer artifact — see TL;DR.)
+with byte `= pixel*3 + interleave`, and `R = plane0[byte]`, `G = plane1[byte]`, `B = plane2[byte]`.
+The heads tile at pitch 432 with ~1 px overlap — **no rotation, no dead-lead skip, no interpolation.**
+(The derivation: correlate each golden column's full vertical profile against every raw byte-column
+→ an assumption-free raw→output map at corr 0.95–0.98; it collapses to the table above. This matches
+@tete17's independent `3×432 → 1296` segment model.)
 
-Verification: on a trailer-stripped capture the per-block boundary jump is `0.008 px` and a
-position-encoded chirp target reconstructs with straight, continuous vertical bars top-to-bottom.
+**Verification:** decoding the encoder over a fresh Linux scan gives **265/265 positions, zero ramp
+jumps** (continuous `0…264`), row-aligned to the Windows golden at per-column corr ≈ 0.95. The old
+409/433 geometry left ~2 seam gaps.
 
-### Seams / dead pixels
+## Calibration — coarse operating point + per-pixel fine-cal
 
-Each head has exactly **24 masked pixels at its leading edge** (head-pixel 0..23 read a hard `0`;
-pixel 24 jumps to full scale; the trailing edge has **none**). After descramble these land as 3
-now-**stationary** dark seams. Two ways to handle them:
+The brightness pipeline is coarse (analog gain/offset/exposure via the `0x1B 0xC6` payload) → fine
+(per-pixel `[offset,gain]` via `0xC3`/`0xC4`) → LUT (`0xC5`).
 
-- **Interpolate** the 24 px per head (current backend: `FI70F_DEAD_LEAD=24`, `FI70F_DEAD_TRAIL=0`).
-  Keeps the 1299-px width; blurs ~24 px of content where a seam crosses a line.
-- **Crop** the 24 masked px per head and butt the heads → **1240 px**, which is exactly what the
-  Windows driver outputs (1240 = 3 × ~413). Seamless, no invented pixels. *Recommended, not yet
-  implemented here.*
+- **Coarse:** send the fi-70F's converged operating point verbatim — offset `0x22/0x23/0x21`, gain
+  `0x37/0x35/0x34`, exposure `0x0892/0x02dd/0x05b7` (`coarseCalData_FI70F`). These are Windows'
+  converged values (traced through its c6 bisection in the USBPcap). The stock epjitsu coarse loop
+  drives a *single shared* gain to an average target, which can't reach these per-channel gains —
+  that was the real cyan cause, so `coarsecal()` sends the fixed payload for `MODEL_FI70F` instead
+  of bisecting.
+- **Fine:** a real per-pixel flat-field table (`fineCalData_FI70F`, 2000 px × 3 × 2 B). The built-in
+  2-point sweep **pegs red** here — the sensor's red barely responds to the `0xff→0xbf` fine-gain
+  probe, so red maxes out still under target and stays under-corrected. The table used is the one
+  Windows computes for this sensor (captured from the trace); `finecal()` memcpys it (env
+  `FI70F_FINECAL=<file>` / `=compute` override the default for experiments).
 
-## Calibration
+**Verification (fresh Linux scan vs the Windows golden):**
 
-- Brightness pipeline = coarse (analog) gain → fine (per-pixel) gain → LUT. Exposure is baked into
-  the SET_WINDOW blob; the per-channel integration constants (`2194 / 733 / 1463`) come from the
-  device's `0x1B 0xC7` response.
-- **Coarse-gain target must be raised for the fi-70F.** The shared fi-60F default (88/92) leaves
-  the fi-70F's weaker CIS near-black with a cyan cast. Raising it (`FI70F_COARSE_GAIN_MIN/MAX =
-  150/160`) yields a bright, correct, cyan-free *white/black* response. This is gated to
-  `MODEL_FI70F`; other models are untouched.
-- The hardware 2-point fine-cal can't measure a slope here (the cal window is blind to the fine
-  gain), so fine gain is held at maximum.
+| metric | old build | this build | Windows |
+|---|---|---|---|
+| encoder ramp | ~2 seam gaps | **265/265, 0 jumps** | 265/265 |
+| neutral-wedge max channel deviation | ~70 (cyan) | **7.6** | ~3 |
+| white uniformity (σ across columns) | — | **3.1** (flat) | 6.9 |
 
-## Open issues
+## Remaining difference — tone / gamma (not a defect)
 
-1. **Residual cyan cast (per-channel *nonlinear* response).** Blacks are true 0 and whites are
-   ~neutral, but the **red channel under-responds through the midtones** (mid-gray reads
-   ≈ R86 / G145 / B157). Measured proof that this is *not* fixable by per-channel gain or 2-point
-   white/black anchoring (R stays ~60 below G after correction) — it needs a **per-channel tone
-   LUT** built from a reliable grayscale/step reference. A clean calibration target + software LUT
-   is the planned fix.
-2. **Crop to 1240** to match Windows exactly (removes the seam-interpolation blur).
+Our midtones read ~37 counts darker and blacks ~11 lighter than the Windows golden (neutral wedge
+patch "175": ours ≈ 94 vs Windows ≈ 131; the "0" patch: ours ≈ 14 vs 1). This is the **`0xC5`
+gamma LUT**: PaperStream bakes in a contrasty curve (crushed blacks, boosted mids), while SANE's
+`send_lut` generates a more linear curve driven by the user's gamma/brightness/contrast options.
+Colour balance and geometry match; only the baked-in contrast differs, which is arguably the right
+default for SANE. Windows' exact `0xC5` LUT is captured and can be replayed if an identical tone is
+ever wanted.
 
 ## Method notes / credits
 
-- The protocol was cross-checked against a USBPcap trace of the Windows PaperStream driver
-  (the trailer, the `0xC7`/`0xC6`/`0xC3`/`0xC4`/`0xC5` cal sequence, the 1240-px output width).
-- Prior-art pass over the SANE tree (`genesys` segment model, `canon_dr` `COLOR_INTERLACE_2510`,
-  `pixma` reorder) confirmed the fixed-permutation model and the "index by absolute stream
-  position, never by transfer block" rule.
-- Complementary work by **@tete17**, who built a `MODEL_FI70F` on the `0A00` firmware and was
-  blocked on exactly the carriage-stop this read path fixes.
+- Cross-checked against a USBPcap trace of Windows PaperStream (trailer; the `0xC7/0xC6/0xC3/0xC4/
+  0xC5` cal sequence and c6 convergence; 1240-px output) and a self-decoding Gray-code target.
+- **Trust the data, not the render:** every claim here is a number (decoded encoder positions,
+  per-channel wedge values, raw byte structure), because rendered images repeatedly misled this
+  effort.
+- Complementary to **@tete17**'s `0A00`-firmware `MODEL_FI70F`; the `3×432→1296` geometry agrees.
 - Reverse-engineering and write-up done with heavy assistance from **Claude (Anthropic)**; every
-  finding here is verified on real hardware.
+  finding verified on real hardware.
