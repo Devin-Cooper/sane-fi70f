@@ -23,6 +23,7 @@ Upstream tracking issue: **[sane-project/backends#833](https://gitlab.com/sane-p
 | Coarse (analog) calibration | ✅ Windows' converged per-channel operating point (offset 22/23/21, gain 37/35/34) |
 | Per-channel colour cast | ✅ **fixed** — neutral wedge, max channel deviation ~7.6 (was ~70) |
 | Output tone / gamma | ⬜ more linear than PaperStream's baked contrast curve (SANE-appropriate; user-adjustable) |
+| B&W camera-back (`--mode Sub-exposures`) | 🟡 foundation — lamp-off, 16-bit lossless 3-sub-exposure output; Y-dither measured (G −0.245 / B −0.723 px @300); HDR + Y-super-res in progress |
 
 See **[FINDINGS.md](FINDINGS.md)** for the full technical story: the 8-byte block trailer (read
 path), the self-decoding Gray-code target used as the oracle, the true 3×432 head geometry, and

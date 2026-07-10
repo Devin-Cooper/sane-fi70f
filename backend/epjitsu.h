@@ -141,9 +141,9 @@ struct scanner
   /* some options require lists of strings or numbers, we keep them here   */
   /* instead of in global vars so that they can differ for each scanner    */
 
-  /*mode group, room for lineart, gray, color, null */
+  /*mode group, room for lineart, gray, color, sub-exposures (fi-70F), null */
   SANE_String_Const source_list[5];
-  SANE_String_Const mode_list[4];
+  SANE_String_Const mode_list[5];
   SANE_Range res_range;
 
   /*geometry group*/
@@ -293,6 +293,7 @@ struct scanner
 #define MODE_COLOR 0
 #define MODE_GRAYSCALE 1
 #define MODE_LINEART 2
+#define MODE_SUBEXP 3   /* fi-70F camera-back: lamp-off 3-sub-exposure raw 16-bit */
 
 #define WINDOW_COARSECAL 0
 #define WINDOW_FINECAL 1

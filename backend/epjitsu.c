@@ -279,6 +279,7 @@ static int coarse_gain_max[3] = { 92, 92, 92 };
 #define STRING_LINEART SANE_VALUE_SCAN_MODE_LINEART
 #define STRING_GRAYSCALE SANE_VALUE_SCAN_MODE_GRAY
 #define STRING_COLOR SANE_VALUE_SCAN_MODE_COLOR
+#define STRING_SUBEXP "Sub-exposures"   /* fi-70F camera-back: 3 raw sub-exposures, 16-bit */
 
 /*
  * used by attach* and sane_get_devices
@@ -1186,6 +1187,8 @@ sane_get_option_descriptor (SANE_Handle handle, SANE_Int option)
     s->mode_list[i++]=STRING_LINEART;
     s->mode_list[i++]=STRING_GRAYSCALE;
     s->mode_list[i++]=STRING_COLOR;
+    if (s->model == MODEL_FI70F)
+        s->mode_list[i++]=STRING_SUBEXP;
     s->mode_list[i]=NULL;
 
     opt->name = SANE_NAME_SCAN_MODE;
@@ -1627,6 +1630,9 @@ sane_control_option (SANE_Handle handle, SANE_Int option,
           else if(s->mode == MODE_COLOR){
             strcpy (val, STRING_COLOR);
           }
+          else if(s->mode == MODE_SUBEXP){
+            strcpy (val, STRING_SUBEXP);
+          }
           return SANE_STATUS_GOOD;
 
         case OPT_RES:
@@ -1767,6 +1773,9 @@ sane_control_option (SANE_Handle handle, SANE_Int option,
           }
           else if (!strcmp (val, STRING_GRAYSCALE)) {
             tmp = MODE_GRAYSCALE;
+          }
+          else if (!strcmp (val, STRING_SUBEXP)) {
+            tmp = MODE_SUBEXP;
           }
           else{
             tmp = MODE_COLOR;
@@ -2269,7 +2278,9 @@ change_params(struct scanner *s)
     /* but the mode, height and y_res are the same as block_xfr */
     width = (settings[i].max_x * s->resolution / settings[i].x_res);
     s->block_img.width_pix = width;
-    s->block_img.width_bytes = width * (settings[i].mode == MODE_COLOR ? 3 : 1);
+    s->block_img.width_bytes = (s->mode == MODE_SUBEXP)
+        ? width * 6                                          /* RGB, 16-bit sub-exposures */
+        : width * (settings[i].mode == MODE_COLOR ? 3 : 1);
     /* fi-70F free-runs the scan (no per-block 0xd3 pacing like the S-models); reading
      * it in small blocks inserts descramble/copy gaps + odd partial reads between
      * blocks that overflow its FIFO and halt the carriage after ~1 block. So buffer
@@ -2314,6 +2325,10 @@ change_params(struct scanner *s)
 
     s->front.x_start_offset = (s->block_xfr.image->width_pix - s->front.width_pix)/2;
     switch (s->mode) {
+      case MODE_SUBEXP:
+        s->front.width_bytes = s->front.width_pix*6;   /* RGB, 16-bit */
+        s->front.x_offset_bytes = s->front.x_start_offset *6;
+        break;
       case MODE_COLOR:
         s->front.width_bytes = s->front.width_pix*3;
         s->front.x_offset_bytes = s->front.x_start_offset *3;
@@ -2495,7 +2510,12 @@ sane_get_parameters (SANE_Handle handle, SANE_Parameters * params)
   }
   params->last_frame = 1;
 
-  if (s->mode == MODE_COLOR) {
+  if (s->mode == MODE_SUBEXP) {
+    /* fi-70F camera-back: 3 raw sub-exposures carried as the R/G/B channels, 16-bit */
+    params->format = SANE_FRAME_RGB;
+    params->depth = 16;
+  }
+  else if (s->mode == MODE_COLOR) {
     params->format = SANE_FRAME_RGB;
     params->depth = 8;
   }
@@ -2616,9 +2636,14 @@ sane_start (SANE_Handle handle)
             return ret;
         }
 
-        ret = lamp(s,1);
+        /* camera-back integrates the lens/ambient image, so the LEDs stay OFF; every
+         * other mode heats the lamp. This is the last lamp call before the scan.
+         * Bench diagnostic: FI70F_CAMLAMP=1 forces the lamp ON in MODE_SUBEXP so the
+         * raw sub-exposure path can be validated / the Y-offset re-measured with LED
+         * contrast (the Y shift is colour-independent) without an external light rig. */
+        ret = lamp(s, (s->mode == MODE_SUBEXP && !getenv("FI70F_CAMLAMP")) ? 0 : 1);
         if (ret != SANE_STATUS_GOOD) {
-            DBG (5, "sane_start: ERROR: failed to heat lamp\n");
+            DBG (5, "sane_start: ERROR: failed to set lamp\n");
             sane_cancel((SANE_Handle)s);
             return ret;
         }
@@ -3118,8 +3143,12 @@ coarsecal(struct scanner *s)
         memcpy(pay,coarseCalData_S1100,payLen);
     }
     else if(s->model == MODEL_FI70F){
-        memcpy(pay, (s->resolution >= 600) ? coarseCalData_FI70F_600
-                                           : coarseCalData_FI70F, payLen);
+        if (s->mode == MODE_SUBEXP)
+            memcpy(pay, (s->resolution >= 600) ? coarseCalData_FI70F_camera_600
+                                               : coarseCalData_FI70F_camera, payLen);
+        else
+            memcpy(pay, (s->resolution >= 600) ? coarseCalData_FI70F_600
+                                               : coarseCalData_FI70F, payLen);
     }
     else{
         memcpy(pay,coarseCalData_FI60F,payLen);
@@ -3431,6 +3460,15 @@ finecal(struct scanner *s)
      * table calibrates, so replay a real per-pixel table that covers the full ~432
      * px/head. TEMPORARY (option A): load Windows' captured table verbatim to validate
      * full-width emission + colour; a proper white-ref flat-field will replace this. */
+    if (s->model == MODEL_FI70F && s->mode == MODE_SUBEXP){
+      /* camera-back: no neutralising flat-field - send an all-zero (unity: offset 0,
+       * gain 0 => x1.0) table so the raw sub-exposure levels pass through unchanged, then
+       * leave the lamp OFF (the sensor integrates the lens/ambient image, not the LEDs). */
+      size_t caln0 = s->sendcal.width_bytes * s->sendcal.pages;
+      memset(s->sendcal.buffer, 0, caln0);
+      ret = finecal_send_cal(s); if(ret) return ret;
+      return lamp(s, 0);
+    }
     if (s->model == MODEL_FI70F){
       /* per-pixel flat-field table -> sendcal.buffer (finecal_send_cal memcpys it to the
        * device verbatim). Default = the captured Windows table (fineCalData_FI70F): it
@@ -3853,7 +3891,10 @@ send_lut (struct scanner *s)
       s->contrast, slope, offset);
 
     for(i=0;i<width;i++){
-      j=slope*i + offset + b;
+      if (s->mode == MODE_SUBEXP)
+        j = i;                        /* camera-back: linear, transmit raw sensor codes */
+      else
+        j=slope*i + offset + b;
 
       j = MAX(j, 0);
       j = MIN(j, height-1);
@@ -4425,6 +4466,43 @@ descramble_raw(struct scanner *s, struct transfer * tp)
           c0 = 402; c1 = 834;
           ia = 2; oa = FI70F_H2_OFF;  ib = 1; ob = FI70F_H1_OFF;  ic = 0; oc = FI70F_H0_OFF;
         }
+        if (s->mode == MODE_SUBEXP){
+          /* camera-back: emit the 3 raw sub-exposures as linear 16-bit R/G/B (v*257).
+           * Identical head-tiling geometry to colour; only the radiometry differs (no
+           * neutralising cal, no gamma) so the exposure bracket + Y-dither are preserved. */
+          for (j = 0; j < height; j++){
+            unsigned char  *rp    = tp->raw_data + j*tp->line_stride;  /* plane 0 = byte 0 */
+            unsigned short *row16 = (unsigned short *)p_out;
+            int x;
+            for (x = 0; x < outw; x++){
+              int inter, pixel, idx;
+              if      (x <= c0) { inter = ia; pixel = oa - x; }
+              else if (x <= c1) { inter = ib; pixel = ob - x; }
+              else              { inter = ic; pixel = oc - x; }
+              if (pixel < 0 || pixel >= hw){
+                row16[x*3+0] = row16[x*3+1] = row16[x*3+2] = 0;  /* platen margin */
+                continue;
+              }
+              idx = pixel*3 + inter;                                /* byte-interleaved head */
+              row16[x*3+0] = (unsigned short)(rp[po0 + idx] * 257); /* sub-exp exp 2194 */
+              row16[x*3+1] = (unsigned short)(rp[po1 + idx] * 257); /* sub-exp exp 733  */
+              row16[x*3+2] = (unsigned short)(rp[po2 + idx] * 257); /* sub-exp exp 1463 */
+            }
+            if (tp->x_res >= 600){                                  /* same 16-bit seam blend */
+              int cx[2], sblend, ch, cc;
+              cx[0] = c0; cx[1] = c1;
+              for (sblend = 0; sblend < 2; sblend++){
+                cc = cx[sblend];
+                for (ch = 0; ch < 3; ch++){
+                  row16[(cc-1)*3+ch] = (2*row16[(cc-2)*3+ch] +   row16[(cc+1)*3+ch]) / 3;
+                  row16[(cc  )*3+ch] = (  row16[(cc-2)*3+ch] + 2*row16[(cc+1)*3+ch]) / 3;
+                }
+              }
+            }
+            p_out += 6*outw;
+          }
+        }
+        else
         for (j = 0; j < height; j++){
           unsigned char *rp  = tp->raw_data + j*tp->line_stride;  /* plane 0 = byte 0 */
           unsigned char *row = p_out;     /* start of this output line (RGB triples) */
@@ -4791,7 +4869,13 @@ copy_block_to_page(struct scanner *s,int side)
 
         last_out_row = this_out_row;
 
-        if (block->mode == MODE_COLOR){
+        if (s->mode == MODE_SUBEXP){
+          /* camera-back: the block already holds the final 16-bit RGB sub-exposures
+           * (descramble did the head-tiling + mirror), and fi-70F has x_start_offset 0,
+           * so copy the row straight through - no colour/gray/lineart conversion. */
+          memcpy(p_out, p_in, (size_t)page_width * 6);
+        }
+        else if (block->mode == MODE_COLOR){
 
           /* reverse order for back side or FI-60F scanner */
           if (line_reverse)

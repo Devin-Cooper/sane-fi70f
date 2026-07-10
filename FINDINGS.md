@@ -165,6 +165,50 @@ Colour balance and geometry match; only the baked-in contrast differs, which is 
 default for SANE. Windows' exact `0xC5` LUT is captured and can be replayed if an identical tone is
 ever wanted.
 
+## B&W camera-back mode (`Sub-exposures`) — lamp-off 3-sub-exposure capture
+
+The fi-70F is being used as a **monochrome scanning back for a large-format camera**. The key
+realisation for that use case: the fi-70F is a **monochrome CIS**, and its "colour" is produced by
+reading the *same* sensels three times while three LEDs strobe, at three integration times
+**2194 / 733 / 1463** (`0x0892 / 0x02dd / 0x05b7` — the three 32-bit big-endian exposures in the
+`0x1B 0xC6` coarse-cal payload). Turn the LEDs **off** and those three planes become **three
+grayscale sub-exposures of the same lens-projected light**, differing only by integration time, with
+a sub-pixel **Y dither** from carriage motion between the three reads — free raw material for HDR and
+Y-super-resolution.
+
+### The `Sub-exposures` scan mode
+
+A new fi-70F-only SANE mode, `--mode Sub-exposures`, emits those three sub-exposures **losslessly**:
+
+- **Lamp off** — the sensor integrates the projected/ambient image, not the scanner LEDs.
+- **Linear, un-neutralised** — the colour-neutralising fine-cal and the gamma LUT are bypassed
+  (identity LUT, all-zero/pass-through fine-cal), and the three analog gains/offsets are set
+  **equal**, so the planes differ only by integration time (the exposure bracket is preserved).
+- **16-bit RGB output** — the three sub-exposures are the R/G/B channels (`R = 2194`, `G = 733`,
+  `B = 1463`), spatially descrambled with the same head-tiling as colour (1240 px @300, 2480 @600),
+  Y-dithered as captured (deliberately *not* Y-registered — that dither is the super-res input). The
+  8-bit sensor value `v` is carried as `v*257` (lossless; each sample is `0xVVVV`, byte-order-invariant).
+
+```
+scanimage -d "$DEV" --mode Sub-exposures --resolution 300 --format=pnm > out.ppm
+```
+→ a 16-bit PPM; split the R/G/B channels to recover the three sub-frames.
+
+### Measured on the live rig (2026-07-10)
+
+| quantity | 300 dpi | 600 dpi | note |
+|---|---|---|---|
+| output | 1240×1749 RGB16 | 2480×3503 RGB16 | full width, no starvation |
+| lossless `v*257` | `0xVVVV` fraction 1.0 | 0.9997 (seam-blend cols) | raw 8-bit codes preserved, not clipped |
+| lamp-off vs lamp-on mean | 28.6 vs 204 | — | LED-off confirmed |
+| inter-plane **Y** offset (G−R / B−R) | **−0.245 / −0.723 px** | **−0.319 / −0.681 px** | sub-pixel, monotonic; the Y super-res dither |
+| inter-plane **X** offset (G−R / B−R) | +0.006 / +0.008 px | **+1.98 / +1.98 px** | X-aligned @300; a ~2 px plane-0 chroma-reg offset remains at 600 (to refine) |
+| colour-path no-regression (encoder) | **265/265, 0 jumps** | 265/265, clean ramp | `--mode Color` byte-path unchanged |
+
+The exposure **bracket** itself (planes in a 2194:733:1463 ≈ 3:1:2 ratio) is validated separately
+under uniform broadband light / the lens rig — a lamp-off scan in the dark is pedestal-dominated and
+does not reveal it. That radiometric alignment is the subject of the HDR work.
+
 ## Method notes / credits
 
 - Cross-checked against a USBPcap trace of Windows PaperStream (trailer; the `0xC7/0xC6/0xC3/0xC4/
