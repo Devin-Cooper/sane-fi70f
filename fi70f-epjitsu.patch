@@ -1916,7 +1916,7 @@ index b71c7b0..ecbdb88 100644
  /* 1b d1 (set window) before coarse cal (read 1 line of 0x63c0 bytes) */
  static unsigned char setWindowCoarseCal_S300_150[] = {
 diff --git a/backend/epjitsu.c b/backend/epjitsu.c
-index ba4dc0d..9cf3bb8 100644
+index ba4dc0d..babd9b4 100644
 --- a/backend/epjitsu.c
 +++ b/backend/epjitsu.c
 @@ -233,8 +233,42 @@ unsigned char global_firmware_filename[PATH_MAX];
@@ -2264,7 +2264,7 @@ index ba4dc0d..9cf3bb8 100644
              /*first table, be order*/
              out[i*2] = (j >> 8) & 0xff;
              out[i*2+1] = j & 0xff;
-@@ -4227,6 +4396,66 @@ descramble_raw(struct scanner *s, struct transfer * tp)
+@@ -4227,6 +4396,81 @@ descramble_raw(struct scanner *s, struct transfer * tp)
          }
        }
      }
@@ -2289,7 +2289,8 @@ index ba4dc0d..9cf3bb8 100644
 +        if (tp->x_res >= 600){       /* 600 dpi: 3 planes @ 0/2940/5874 (interleave-phase
 +                                      * aligned), head pitch ~888. Verified 265/265 ramp. */
 +          outw = 2480; hw = 888; po0 = 0; po1 = 2940; po2 = 5874;
-+          c0 = 784; c1 = 1660;
++          c0 = 796; c1 = 1660;   /* switch at each head's inner edge (pixel~0); switching
++                                  * earlier lands on the next head's dark vignetted far edge */
 +          ia = 2; oa = 796;  ib = 1; ob = 1660;  ic = 0; oc = 2524;
 +        } else {                     /* 300 dpi: 3 planes @ 0/2190/4380, head pitch 432 */
 +          outw = FI70F_OUT_WIDTH; hw = FI70F_HEAD_WIDTH; po0 = 0; po1 = 2190; po2 = 4380;
@@ -2314,6 +2315,20 @@ index ba4dc0d..9cf3bb8 100644
 +            row[x*3+1] = rp[po1 + idx];       /* G (plane 1) */
 +            row[x*3+2] = rp[po2 + idx];       /* B (plane 2) */
 +          }
++          if (tp->x_res >= 600){
++            /* the 2 columns right at each head crossover sit on a head's dim, vignetted
++             * inner edge (pixels 0..1); blend them from the flanking good columns so the
++             * head seam is invisible. (300 dpi head edges are clean and need no fill.) */
++            int cx[2], s, ch, cc;
++            cx[0] = c0; cx[1] = c1;
++            for (s = 0; s < 2; s++){
++              cc = cx[s];
++              for (ch = 0; ch < 3; ch++){
++                row[(cc-1)*3+ch] = (2*row[(cc-2)*3+ch] +   row[(cc+1)*3+ch]) / 3;
++                row[(cc  )*3+ch] = (  row[(cc-2)*3+ch] + 2*row[(cc+1)*3+ch]) / 3;
++              }
++            }
++          }
 +          p_out += 3*outw;
 +        }
 +      }
@@ -2331,7 +2346,7 @@ index ba4dc0d..9cf3bb8 100644
      else if (s->model == MODEL_S1100){
        for (j = 0; j < height; j++){             /* row (y)*/
          int curr_col = 0;
-@@ -4332,7 +4561,7 @@ descramble_raw_gray(struct scanner *s, struct transfer * tp)
+@@ -4332,7 +4576,7 @@ descramble_raw_gray(struct scanner *s, struct transfer * tp)
  
      DBG(15, "descramble_raw_gray: start\n");
  
@@ -2340,7 +2355,7 @@ index ba4dc0d..9cf3bb8 100644
        for (row = 0; row < height; row++){
  
          unsigned char *p_in = tp->raw_data + row * tp->line_stride;
-@@ -4364,12 +4593,19 @@ read_from_scanner(struct scanner *s, struct transfer * tp)
+@@ -4364,12 +4608,19 @@ read_from_scanner(struct scanner *s, struct transfer * tp)
  {
      SANE_Status ret=SANE_STATUS_GOOD;
      size_t bytes = MAX_IMG_PASS;
@@ -2363,7 +2378,7 @@ index ba4dc0d..9cf3bb8 100644
          bytes = MIN(bytes, remainBlock);
      }
  
-@@ -4406,19 +4642,62 @@ read_from_scanner(struct scanner *s, struct transfer * tp)
+@@ -4406,19 +4657,62 @@ read_from_scanner(struct scanner *s, struct transfer * tp)
  
          DBG(15,"read_from_scanner: got GOOD/EOF (%lu)\n",(unsigned long)bytes);
  
@@ -2436,7 +2451,7 @@ index ba4dc0d..9cf3bb8 100644
  
          ret = SANE_STATUS_GOOD;
      }
-@@ -4448,6 +4727,8 @@ copy_block_to_page(struct scanner *s,int side)
+@@ -4448,6 +4742,8 @@ copy_block_to_page(struct scanner *s,int side)
      int image_height = block->total_bytes / block->line_stride;
      int page_width = page->image->width_pix;
      int block_page_stride = block->image->width_bytes * block->image->height;
@@ -2445,7 +2460,7 @@ index ba4dc0d..9cf3bb8 100644
      int line_reverse = (side == SIDE_BACK) || (s->model == MODEL_FI60F) || (s->model == MODEL_FI65F);
      int i,j,k=0;
  
-@@ -4761,6 +5042,13 @@ teardown_buffers(struct scanner *s)
+@@ -4761,6 +5057,13 @@ teardown_buffers(struct scanner *s)
  	s->cal_data.raw_data = NULL;
      }
  

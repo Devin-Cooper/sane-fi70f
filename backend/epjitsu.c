@@ -4417,7 +4417,8 @@ descramble_raw(struct scanner *s, struct transfer * tp)
         if (tp->x_res >= 600){       /* 600 dpi: 3 planes @ 0/2940/5874 (interleave-phase
                                       * aligned), head pitch ~888. Verified 265/265 ramp. */
           outw = 2480; hw = 888; po0 = 0; po1 = 2940; po2 = 5874;
-          c0 = 784; c1 = 1660;
+          c0 = 796; c1 = 1660;   /* switch at each head's inner edge (pixel~0); switching
+                                  * earlier lands on the next head's dark vignetted far edge */
           ia = 2; oa = 796;  ib = 1; ob = 1660;  ic = 0; oc = 2524;
         } else {                     /* 300 dpi: 3 planes @ 0/2190/4380, head pitch 432 */
           outw = FI70F_OUT_WIDTH; hw = FI70F_HEAD_WIDTH; po0 = 0; po1 = 2190; po2 = 4380;
@@ -4441,6 +4442,20 @@ descramble_raw(struct scanner *s, struct transfer * tp)
             row[x*3+0] = rp[po0 + idx];       /* R (plane 0) */
             row[x*3+1] = rp[po1 + idx];       /* G (plane 1) */
             row[x*3+2] = rp[po2 + idx];       /* B (plane 2) */
+          }
+          if (tp->x_res >= 600){
+            /* the 2 columns right at each head crossover sit on a head's dim, vignetted
+             * inner edge (pixels 0..1); blend them from the flanking good columns so the
+             * head seam is invisible. (300 dpi head edges are clean and need no fill.) */
+            int cx[2], s, ch, cc;
+            cx[0] = c0; cx[1] = c1;
+            for (s = 0; s < 2; s++){
+              cc = cx[s];
+              for (ch = 0; ch < 3; ch++){
+                row[(cc-1)*3+ch] = (2*row[(cc-2)*3+ch] +   row[(cc+1)*3+ch]) / 3;
+                row[(cc  )*3+ch] = (  row[(cc-2)*3+ch] + 2*row[(cc+1)*3+ch]) / 3;
+              }
+            }
           }
           p_out += 3*outw;
         }
