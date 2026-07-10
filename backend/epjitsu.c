@@ -259,6 +259,10 @@ unsigned char global_firmware_filename[PATH_MAX];
 #define FI70F_H1_OFF           834
 #define FI70F_H0_OFF           1265
 #define FI70F_OUT_WIDTH        1240   /* descrambled output width (matches Windows) */
+
+/* fi-70F exposes only its two native optical resolutions; the descramble geometry is
+ * per-resolution and does not rescale, so intermediate resolutions are not offered. */
+static const SANE_Word fi70f_res_list[] = { 2, 300, 600 };
 static int coarse_gain_min[3] = { 88, 88, 88 };    /* front, back, FI-60F 3rd plane */
 static int coarse_gain_max[3] = { 92, 92, 92 };
 /* fi-70F's CIS is much less sensitive than the fi-60F's; the shared 88/92 analog-gain
@@ -1204,11 +1208,18 @@ sane_get_option_descriptor (SANE_Handle handle, SANE_Int option)
     opt->unit = SANE_UNIT_DPI;
     opt->cap = SANE_CAP_SOFT_SELECT | SANE_CAP_SOFT_DETECT;
 
-    s->res_range.min = s->min_res;
-    s->res_range.max = s->max_res;
-    s->res_range.quant = 1;
-    opt->constraint_type = SANE_CONSTRAINT_RANGE;
-    opt->constraint.range = &s->res_range;
+    if(s->model == MODEL_FI70F){
+      /* only native 300/600 dpi (per-resolution descramble, no rescale) */
+      opt->constraint_type = SANE_CONSTRAINT_WORD_LIST;
+      opt->constraint.word_list = fi70f_res_list;
+    }
+    else{
+      s->res_range.min = s->min_res;
+      s->res_range.max = s->max_res;
+      s->res_range.quant = 1;
+      opt->constraint_type = SANE_CONSTRAINT_RANGE;
+      opt->constraint.range = &s->res_range;
+    }
   }
 
   /* "Geometry" group ---------------------------------------------------- */
@@ -2029,6 +2040,16 @@ static struct model_res settings[] = {
    setWindowCoarseCal_FI70F_300, setWindowFineCal_FI70F_300,
    setWindowScan_FI70F_300, sendCal1Header_FI70F_300,
    sendCal2Header_FI70F_300, setWindowScan_FI70F_300 },
+
+ /* fi-70F 600 dpi: same 3-plane / 3-interleaved-head layout at 2x scale. Raw line =
+    8544 bytes = 3 planes at byte offsets 0/2942/5876; device block = 61 lines + 8-byte
+    trailer. Descramble map + plane offsets are resolution-specific (see descramble_raw
+    and read_from_scanner). CAL geometry 8544/2848/2848 -> 17088-byte fine table.
+    Coarse/fine cal share the ypix=64 window; send-cal + scan use the ypix=3503 window. */
+ { MODEL_FI70F, MODE_COLOR, 600, 600, 0, 2480, 32, 3503, 32, 8544, 2848, 866, 61, 8544, 2848, 2848,
+   setWindowCal_FI70F_600, setWindowCal_FI70F_600,
+   setWindowScan_FI70F_600, sendCal1Header_FI70F_600,
+   sendCal2Header_FI70F_600, setWindowScan_FI70F_600 },
 
  { MODEL_FI60F | MODEL_FI65F, MODE_COLOR, 300, 150, 0, 1296, 32,  875, 32, 2400*3,  958*3,  432,  72, 2400*3, 958*3, 432,
    setWindowCoarseCal_FI60F_300, setWindowFineCal_FI60F_300,
@@ -3097,7 +3118,8 @@ coarsecal(struct scanner *s)
         memcpy(pay,coarseCalData_S1100,payLen);
     }
     else if(s->model == MODEL_FI70F){
-        memcpy(pay,coarseCalData_FI70F,payLen);
+        memcpy(pay, (s->resolution >= 600) ? coarseCalData_FI70F_600
+                                           : coarseCalData_FI70F, payLen);
     }
     else{
         memcpy(pay,coarseCalData_FI60F,payLen);
@@ -3428,7 +3450,8 @@ finecal(struct scanner *s)
                    fclose(rf); }
           DBG(10, "finecal: fi-70F loaded cal table from %s\n", rep);
         } else {
-          memcpy(s->sendcal.buffer, fineCalData_FI70F, caln);
+          memcpy(s->sendcal.buffer,
+                 (s->resolution >= 600) ? fineCalData_FI70F_600 : fineCalData_FI70F, caln);
         }
         ret = finecal_send_cal(s); if(ret) return ret;
         ret = lamp(s,1);
@@ -4385,27 +4408,39 @@ descramble_raw(struct scanner *s, struct transfer * tp)
        * target. Mirror is done HERE, so FI70F is excluded from copy_block_to_page's
        * line_reverse. (Cal images use the plain planar readback below.) */
       if (tp == &s->block_xfr){
-        int ps   = tp->plane_stride;      /* 2190: R@0 G@ps B@2*ps within each line */
-        int outw = FI70F_OUT_WIDTH;       /* 1240 */
+        /* resolution-specific head map: output col x -> (head interleave, in-head pixel).
+         * heads tile mirrored (pixel decreases with x); byte = pixel*3 + interleave, read
+         * from each colour plane at its byte offset po0/po1/po2. Constants derived from
+         * the Windows output via golden->raw correlation, at 300 and 600 dpi. */
+        int outw, hw, po0, po1, po2, c0, c1;
+        int oa, ia, ob, ib, oc, ic;
+        if (tp->x_res >= 600){       /* 600 dpi: 3 planes @ 0/2940/5874 (interleave-phase
+                                      * aligned), head pitch ~888. Verified 265/265 ramp. */
+          outw = 2480; hw = 888; po0 = 0; po1 = 2940; po2 = 5874;
+          c0 = 784; c1 = 1660;
+          ia = 2; oa = 796;  ib = 1; ob = 1660;  ic = 0; oc = 2524;
+        } else {                     /* 300 dpi: 3 planes @ 0/2190/4380, head pitch 432 */
+          outw = FI70F_OUT_WIDTH; hw = FI70F_HEAD_WIDTH; po0 = 0; po1 = 2190; po2 = 4380;
+          c0 = 402; c1 = 834;
+          ia = 2; oa = FI70F_H2_OFF;  ib = 1; ob = FI70F_H1_OFF;  ic = 0; oc = FI70F_H0_OFF;
+        }
         for (j = 0; j < height; j++){
           unsigned char *rp  = tp->raw_data + j*tp->line_stride;  /* plane 0 = byte 0 */
           unsigned char *row = p_out;     /* start of this output line (RGB triples) */
           int x;
           for (x = 0; x < outw; x++){
             int inter, pixel, idx;
-            /* pick the read-head that images output column x (heads tile at pitch 432,
-             * horizontally mirrored so in-head pixel decreases as x increases) */
-            if      (x <= 402) { inter = 2; pixel = FI70F_H2_OFF - x; }
-            else if (x <= 834) { inter = 1; pixel = FI70F_H1_OFF - x; }
-            else               { inter = 0; pixel = FI70F_H0_OFF - x; }
-            if (pixel < 0 || pixel >= FI70F_HEAD_WIDTH){
+            if      (x <= c0) { inter = ia; pixel = oa - x; }
+            else if (x <= c1) { inter = ib; pixel = ob - x; }
+            else              { inter = ic; pixel = oc - x; }
+            if (pixel < 0 || pixel >= hw){
               row[x*3+0] = row[x*3+1] = row[x*3+2] = 0;  /* beyond sensor: platen margin */
               continue;
             }
             idx = pixel*3 + inter;            /* byte-interleaved head read */
-            row[x*3+0] = rp[idx];             /* R (plane 0 @ 0)    */
-            row[x*3+1] = rp[ps + idx];        /* G (plane 1 @ 2190) */
-            row[x*3+2] = rp[2*ps + idx];      /* B (plane 2 @ 4380) */
+            row[x*3+0] = rp[po0 + idx];       /* R (plane 0) */
+            row[x*3+1] = rp[po1 + idx];       /* G (plane 1) */
+            row[x*3+2] = rp[po2 + idx];       /* B (plane 2) */
           }
           p_out += 3*outw;
         }
@@ -4617,8 +4652,10 @@ read_from_scanner(struct scanner *s, struct transfer * tp)
            * device-stream position d is trailer iff (d % dev_block) >= img_block.
            * dev_pos tracks d across reads, so a trailer split across a read
            * boundary is handled correctly. */
-          int img_block = FI70F_BLOCK_H * tp->line_stride;   /* 522000 */
-          int dev_block = img_block + FI70F_TRAILER;         /* 522008 */
+          /* device block height: 87 lines @300dpi (522000+8), 61 lines @600dpi (521184+8) */
+          int block_h   = (tp->x_res >= 600) ? 61 : FI70F_BLOCK_H;
+          int img_block = block_h * tp->line_stride;
+          int dev_block = img_block + FI70F_TRAILER;
           size_t off = 0;
           while (off < bytes && tp->rx_bytes < tp->total_bytes) {
             int pos = (tp->dev_pos + (int)off) % dev_block;

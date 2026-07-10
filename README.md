@@ -17,7 +17,8 @@ Upstream tracking issue: **[sane-project/backends#833](https://gitlab.com/sane-p
 |---|---|
 | Firmware upload, detection | ✅ works |
 | Full-page scan (read path) | ✅ works — free-running page, strip the 8-byte per-block trailer |
-| Descramble geometry | ✅ **solved, gap-free** — 3×432-px heads at offsets 0/2190/4380, tiled → 1240 px; encoder ramp **265/265 positions, 0 jumps** |
+| Resolutions | ✅ **300 and 600 dpi** (native optical), both descramble-verified |
+| Descramble geometry | ✅ **solved, gap-free** at both resolutions — 3 byte-interleaved heads per plane, tiled → 1240 px (300 dpi) / 2480 px (600 dpi); encoder ramp **264–265/265 positions, 0 jumps** |
 | Seam handling | ✅ heads tile continuously — **no dead pixels, no interpolation** |
 | Coarse (analog) calibration | ✅ Windows' converged per-channel operating point (offset 22/23/21, gain 37/35/34) |
 | Per-channel colour cast | ✅ **fixed** — neutral wedge, max channel deviation ~7.6 (was ~70) |
