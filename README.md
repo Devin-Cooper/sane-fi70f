@@ -84,6 +84,6 @@ un-stripped 8-byte block trailer. Strip it and the seams stand still:
 
 ## Credits
 
-Reverse-engineered by **Devin Cooper** with heavy assistance from **Claude (Anthropic)**;
-complementary to **@tete17**'s `0A00`-firmware work on issue #833. All findings verified on real
-hardware. Not affiliated with or endorsed by Ricoh/Fujitsu or the SANE project.
+Reverse-engineered by **Devin Cooper**; complementary to **@tete17**'s `0A00`-firmware work on
+issue #833. All findings verified on real hardware. Not affiliated with or endorsed by
+Ricoh/Fujitsu or the SANE project.

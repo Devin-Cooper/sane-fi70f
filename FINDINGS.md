@@ -147,5 +147,4 @@ ever wanted.
   per-channel wedge values, raw byte structure), because rendered images repeatedly misled this
   effort.
 - Complementary to **@tete17**'s `0A00`-firmware `MODEL_FI70F`; the `3×432→1296` geometry agrees.
-- Reverse-engineering and write-up done with heavy assistance from **Claude (Anthropic)**; every
-  finding verified on real hardware.
+- Reverse-engineering and write-up by **Devin Cooper**; every finding verified on real hardware.
