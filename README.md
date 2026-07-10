@@ -44,6 +44,21 @@ Encoder tracks run gap-free full width across both head seams (ours top / Window
 
 ![](images/06-encoder-gapfree.png)
 
+## 600 dpi
+
+The second native resolution (2480×3496) works the same way at ~2× scale — see
+[FINDINGS.md](FINDINGS.md#600-dpi) for the geometry. Verified **265/265 encoder positions, 0 jumps**.
+
+![](images/08-600dpi-full.png)
+
+The head seams needed one extra fix at 600 dpi: switching heads too early landed on a head's dark,
+vignetted far edge, producing a black seam at ⅓ width. Switching at the outgoing head's inner edge
+(plus a 2-column edge blend) removes it — left seam, before vs after:
+
+| Before (black seam) | After (fixed) |
+|---|---|
+| ![](images/09-600dpi-seam-before.png) | ![](images/10-600dpi-seam-after.png) |
+
 ## What's here
 
 - `backend/epjitsu.c`, `backend/epjitsu-cmd.h`, `backend/epjitsu.h`, `backend/epjitsu.conf.in` —

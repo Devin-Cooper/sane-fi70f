@@ -68,7 +68,8 @@ fine-cal table makes the neutral wedge neutral.
 - USB `05ca:0308`, firmware-upload device (`Comp70fFirmFile`, an `NDL1` blob, from PaperStream IP).
   Revisions seen: `70f_0000.nal` (this unit) and `70f_0A00.nal` (@tete17's). Config:
   `firmware .../70f_0000.nal` + `usb 0x05ca 0x0308`.
-- 3-read-head CIS sensor, 300 dpi, colour. Belongs in **epjitsu** (with fi-60F/fi-65F), not fujitsu.
+- 3-read-head CIS sensor, colour, 300 and 600 dpi optical. Belongs in **epjitsu** (with the
+  fi-60F/fi-65F), not fujitsu.
 
 ## Read path (`read_from_scanner`, `sane_read`)
 
@@ -103,6 +104,31 @@ The heads tile at pitch 432 with ~1 px overlap — **no rotation, no dead-lead s
 **Verification:** decoding the encoder over a fresh Linux scan gives **265/265 positions, zero ramp
 jumps** (continuous `0…264`), row-aligned to the Windows golden at per-column corr ≈ 0.95. The old
 409/433 geometry left ~2 seam gaps.
+
+## 600 dpi
+
+The fi-70F's second native optical resolution works the same way at ~2× scale; the geometry was
+re-derived from a Windows 600 dpi capture with the same golden→raw correlation, then confirmed with
+the encoder target as the oracle:
+
+- **Read path:** raw line = **8544 bytes** (= 3 × xpix 2848); device block = **61 lines + 8-byte
+  trailer** (521192 B). The trailer strip is resolution-aware (87 lines @300 dpi, 61 @600). Windows'
+  captured coarse/fine cal blobs and the `ypix=64` (cal) / `ypix=3503` (scan) windows are sent verbatim.
+- **Descramble:** 3 colour planes at byte offsets **0 / 2940 / 5874** — the offset **must** be
+  interleave-phase-aligned (`offset % 3 == 0`); e.g. 2942 is off-phase and scrambles the heads.
+  Within a plane the 3 heads are byte-interleaved as at 300 dpi; the per-head column map is
+  `x ≤ 796 → head 2, pixel = 796−x`; `797…1660 → head 1, 1660−x`; `x ≥ 1661 → head 0, 2524−x`.
+  Output is **2480 px**. Verified **265/265 encoder positions, 0 jumps**.
+- **Head seams:** switch heads at the *outgoing* head's inner edge (pixel ≈ 0). Switching earlier
+  lands on the *incoming* head's dark, vignetted far edge — which produced a 12-column black seam at
+  ⅓ width until the crossover was moved to 796. Each head's own last 1–2 edge pixels are still
+  slightly dim, so those two columns at each crossover are blended from their bright neighbours
+  (600 dpi only; 300 dpi head edges are clean). Result: no visible seam.
+- **Calibration** follows the 300 dpi recipe with the 600 dpi coarse operating point and a captured
+  17088-byte fine table; the grey wedge is neutral (max channel deviation ~14).
+
+The backend advertises only the two native resolutions (300 and 600 dpi) — the descramble is
+per-resolution and does not rescale.
 
 ## Calibration — coarse operating point + per-pixel fine-cal
 
