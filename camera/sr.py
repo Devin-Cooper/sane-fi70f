@@ -1,6 +1,6 @@
 """Y-only super-resolution of the fi-70F sub-frames by iterative back-projection (#3)."""
 import numpy as np
-from .subframes import estimate_shifts, fourier_shift
+from .subframes import estimate_shifts, fourier_shift, gain_match
 
 
 def gaussian_y(img, sigma):
@@ -37,16 +37,6 @@ def backproject_y(resid, delta, sigma, f, fH):
     np.add.at(hr, lo, (1 - fr) * resid)
     np.add.at(hr, lo + 1, fr * resid)
     return gaussian_y(hr, sigma * f)
-
-
-def gain_match(planes, ref=0):
-    """Rescale each plane to the reference by a least-squares linear fit plane ≈ a·R + b."""
-    R = np.asarray(planes[ref], dtype=np.float64); out = []
-    for p in planes:
-        p = np.asarray(p, dtype=np.float64)
-        a, b = np.polyfit(R.ravel(), p.ravel(), 1)
-        out.append((p - b) / (a if abs(a) > 1e-9 else 1.0))
-    return out
 
 
 def _align_and_prep(subframes):

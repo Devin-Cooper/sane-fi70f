@@ -73,3 +73,15 @@ def estimate_shifts(planes, ref=0):
 def register(planes, shifts):
     """Align each plane to the reference by undoing its measured displacement."""
     return [fourier_shift(p, -dy, -dx) for p, (dy, dx) in zip(planes, shifts)]
+
+
+def gain_match(planes, ref=0):
+    """Rescale each plane to the reference by a least-squares linear fit plane ≈ a·R + b.
+    Works for lamp-on (a≈1) and lamp-off (a = exposure ratio), so it is bracket-independent."""
+    R = np.asarray(planes[ref], dtype=np.float64)
+    out = []
+    for p in planes:
+        p = np.asarray(p, dtype=np.float64)
+        a, b = np.polyfit(R.ravel(), p.ravel(), 1)
+        out.append((p - b) / (a if abs(a) > 1e-9 else 1.0))
+    return out

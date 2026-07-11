@@ -61,3 +61,16 @@ Y-MTF gain is measured (~1.0×)**: that target has no fine near-Nyquist Y detail
 super-resolution, the sub-pixel offsets are clustered (0 / −0.25 / −0.73 ≈ ~2 effective samples), and
 the short-exposure planes are noisier than the reference. A definitive hardware test needs a
 resolution target (line-pairs / USAF) and, ideally, a measured sensor LSF for `--sigma`.
+
+## Equalise for SNR
+
+```
+scanimage ... --mode Sub-exposures --exposure-mode equalise > eq.ppm
+python3 -m camera.cli average eq.ppm out.pgm
+```
+
+With `--mode Sub-exposures --exposure-mode equalise` the backend sets the three integration times
+equal, so the planes are radiometrically-equal captures with independent per-read noise. `average`
+gain-matches and averages them for a **√3 ≈ 1.7× noise reduction** (a cleaner B&W frame). The three
+integration times are also individually settable (`--exp1/--exp2/--exp3`), and `--exposure-mode
+bracket-wide` widens the ratio to feed `merge-hdr` for more dynamic range.
