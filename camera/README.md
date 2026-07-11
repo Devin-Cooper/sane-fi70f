@@ -61,3 +61,21 @@ Y-MTF gain is measured (~1.0×)**: that target has no fine near-Nyquist Y detail
 super-resolution, the sub-pixel offsets are clustered (0 / −0.25 / −0.73 ≈ ~2 effective samples), and
 the short-exposure planes are noisier than the reference. A definitive hardware test needs a
 resolution target (line-pairs / USAF) and, ideally, a measured sensor LSF for `--sigma`.
+
+## Averaging for SNR
+
+```
+scanimage ... --mode Sub-exposures > sub.ppm
+python3 -m camera.cli average sub.ppm out.pgm
+```
+
+The three sub-exposures are three separate sensor reads of the same scene, so mean-matching and
+averaging them reduces random (read/shot) noise by up to **√3 ≈ 1.7×** — a cleaner B&W frame.
+
+**Measured fi-70F caveat (issue #4):** the per-sub-exposure integration time is **fixed in firmware
+and not operator-settable** — patching the coarse-cal exposure register (`0x1B 0xC6`, bytes 16–27)
+has *no effect* on the scan, verified over a 160× range, lamp on and off, with the patch confirmed
+reaching the device. So there is no software "equalise/bracket" exposure control; `average` operates
+on the native planes as-is. The √3 gain is validated on synthetic independent-noise frames; a clean
+hardware number needs a uniform, well-exposed flat field plus a dark frame, because fixed-pattern
+noise is correlated across the three planes (same sensels) and does not average down.

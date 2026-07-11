@@ -4,6 +4,7 @@ import sys
 from .subframes import load_subframes
 from .hdr import merge_hdr, to_pgm16
 from .sr import superres_y, interp_baseline_y
+from .snr import average_frames
 from .pnm import write_pgm16
 
 
@@ -23,6 +24,9 @@ def main(argv=None):
     s.add_argument("--sigma", type=float, default=0.45)
     s.add_argument("--iters", type=int, default=15)
     s.add_argument("--baseline", action="store_true", help="interp baseline instead of IBP")
+    av = sub.add_parser("average", help="equalise-for-SNR: average the 3 sub-exposures (sqrt-N noise cut)")
+    av.add_argument("input")
+    av.add_argument("output")
     a = ap.parse_args(argv)
     if a.cmd == "merge-hdr":
         exps = tuple(int(x) for x in a.exposures.split(","))
@@ -45,6 +49,12 @@ def main(argv=None):
         out = to_pgm16(hr)
         write_pgm16(a.output, out)
         print("superres: wrote %s (%dx%d, %dx Y)" % (a.output, out.shape[1], out.shape[0], a.factor))
+        return 0
+    if a.cmd == "average":
+        sf = load_subframes(a.input)
+        out = to_pgm16(average_frames(sf))
+        write_pgm16(a.output, out)
+        print("average: wrote %s (%dx%d, sqrt-N SNR)" % (a.output, out.shape[1], out.shape[0]))
         return 0
     return 2
 
