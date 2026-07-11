@@ -42,3 +42,22 @@ python3 -m pytest camera -q
 Unit tests run entirely on synthetic brackets (no hardware). The real dynamic-range-in-stops number
 is measured on a step-wedge / high-dynamic-range scene under lamp-off broadband light (or the lens
 rig), once the exposure bracket is confirmed.
+
+## Y super-resolution
+
+```
+python3 -m camera.cli superres scan.ppm out.pgm [--factor 2] [--sigma 0.45] [--iters 15] [--baseline]
+```
+
+Reconstructs a **Y-only** higher-resolution grayscale (`--factor`× taller, default 2×) from the three
+sub-pixel-Y-shifted sub-frames by iterative back-projection with a Gaussian sensor line-spread
+(`--sigma`, native px). X is untouched (it's at the 600 dpi optical limit). `--baseline` gives the
+non-uniform interpolation reconstructor for comparison.
+
+**Status (be honest about it):** on *synthetic* data with a known LSF, IBP raises the slanted-edge
+Y-MTF50 by ~1.2–1.3× over both a single upsampled plane and the interpolation baseline — real
+deconvolved detail, not upscaling. On *real* fi-70F scans of the Gray-code target, **no significant
+Y-MTF gain is measured (~1.0×)**: that target has no fine near-Nyquist Y detail to reveal
+super-resolution, the sub-pixel offsets are clustered (0 / −0.25 / −0.73 ≈ ~2 effective samples), and
+the short-exposure planes are noisier than the reference. A definitive hardware test needs a
+resolution target (line-pairs / USAF) and, ideally, a measured sensor LSF for `--sigma`.
