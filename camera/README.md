@@ -52,7 +52,12 @@ python3 -m camera.cli superres scan.ppm out.pgm [--factor 2] [--sigma 0.45] [--i
 Reconstructs a **Y-only** higher-resolution grayscale (`--factor`× taller, default 2×) from the three
 sub-pixel-Y-shifted sub-frames by iterative back-projection with a Gaussian sensor line-spread
 (`--sigma`, native px). X is untouched (it's at the 600 dpi optical limit). `--baseline` gives the
-non-uniform interpolation reconstructor for comparison — on a slanted-edge SFR the IBP output has a
-higher Y-MTF50 than both the interpolation baseline and a single upsampled plane, i.e. **real detail,
-not upscaling**. The uneven measured offsets (0 / −0.245 / −0.723 px) cap the effective gain at
-~1.2–1.3× MTF50.
+non-uniform interpolation reconstructor for comparison.
+
+**Status (be honest about it):** on *synthetic* data with a known LSF, IBP raises the slanted-edge
+Y-MTF50 by ~1.2–1.3× over both a single upsampled plane and the interpolation baseline — real
+deconvolved detail, not upscaling. On *real* fi-70F scans of the Gray-code target, **no significant
+Y-MTF gain is measured (~1.0×)**: that target has no fine near-Nyquist Y detail to reveal
+super-resolution, the sub-pixel offsets are clustered (0 / −0.25 / −0.73 ≈ ~2 effective samples), and
+the short-exposure planes are noisier than the reference. A definitive hardware test needs a
+resolution target (line-pairs / USAF) and, ideally, a measured sensor LSF for `--sigma`.
